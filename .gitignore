@@ -1,0 +1,15 @@
+# Node
+node_modules
+npm-debug.log
+
+# Cloudflare Workers
+.wrangler
+dist
+*.map
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db

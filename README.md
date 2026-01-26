@@ -37,19 +37,31 @@ SiteProxy rebirth是一个部署在 Cloudflare workers 上的轻量级网络访�
 
 > **小技巧**：直接在浏览器地址栏输入 `https://您的域名/https://目标网站` 也可以快速跳转！
 
-## 🛠️ 极速部署 (无需懂代码)
+## 🛠️ 部署指南
 
-您**不需要**安装任何环境，甚至不需要懂编程，只需简单 3 步：
+### 方法一：极速部署 (推荐)
 
 1.  **获取代码**：
-    直接下载项目中的 [dist/worker.js](./dist/worker.js) 文件（这是已经编译好的单文件版本）。
+    直接下载项目根目录中的 [worker.js](./worker.js) 文件（这是已经编译好的单文件版本）。
 
 2.  **上传到 Cloudflare**：
     -   登录 Cloudflare Dashboard。
-    -   进入 **Workers & Pages** -> **Create Application** -> **Create Worker**。
-    -   命名您的 Worker（例如 `siteproxy`）并点击 **Deploy**。
-    -   点击 **Edit code**，将编辑器中的内容清空，把第 1 步下载的 `worker.js` 内容全部复制进去。
-    -   点击 **Save and deploy**。
+    -   进入 **Workers & Pages** -> **Create Application** -> **Connect to Git**。
+    -   选择您 Fork 的仓库，保存并部署。
+3.  **配置密码**：
+    在部署后的 Settings -> Variables 中添加 `ACCESS_PASSWORD`。
+
+### 方法二：手动构建上传
+
+如果您不使用 Git 集成，可以手动构建产物：
+
+11.  **安装依赖与构建**：
+    ```bash
+    npm install
+    npm run build:file # 生成 dist/worker.js
+    ```
+2.  **复制上传**：
+    将生成的 `dist/worker.js` 内容复制到 Cloudflare Worker 的代码编辑器中保存。
 
 3.  **配置密码与安全 (重要!)**：
     为了保护您的代理不被滥用，**强烈建议**配置访问密码。
