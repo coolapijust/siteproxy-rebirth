@@ -1,0 +1,10 @@
+name = "siteproxy-cf"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[observability]
+enabled = true
+
+[vars]
+# 设置访问密码 (部署后建议通过 wrangler secret put 配置)
+# ACCESS_PASSWORD = "your_password_here"
