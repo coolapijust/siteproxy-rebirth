@@ -17,14 +17,14 @@ app.use('/*', async (c, next) => {
     const password = c.env.ACCESS_PASSWORD
     if (!password) return next() // 未配置密码则跳过验证
 
-    const authCookie = getCookie(c, '__sp_auth')
+    const authCookie = getCookie(c, '__sp_session')
     if (authCookie === password) return next()
 
     // 检查是否是登录表单提交
     if (c.req.method === 'POST') {
         const formData = await c.req.parseBody()
         if (formData['password'] === password) {
-            setCookie(c, '__sp_auth', password, {
+            setCookie(c, '__sp_session', password, {
                 path: '/', secure: true, httpOnly: true, sameSite: 'Lax', maxAge: 86400 * 7
             })
             return c.redirect('/')
@@ -234,7 +234,9 @@ function renderLoginPage() {
         <div class="box">
             <h1>🔒 访问验证</h1>
             <form method="POST">
-                <input type="password" name="password" placeholder="请输入访问密码" required autofocus>
+                <!-- 添加隐藏的用户名输入框以辅助密码管理器 -->
+                <input type="text" name="username" value="admin" style="display:none" autocomplete="username">
+                <input type="password" name="password" placeholder="请输入访问密码" required autofocus autocomplete="current-password">
                 <button type="submit">验证</button>
             </form>
         </div>
@@ -247,7 +249,7 @@ function renderHomePage(origin: string) {
     const sites = [
         { name: 'Brave Search', url: 'https://search.brave.com', icon: '🦁' },
         { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: '📖' },
-        { name: 'Duck AI', url: 'https://duck.ai', icon: '🦆' },
+        { name: 'Duck AI', url: 'https://duckduckgo.com/?ia=chat', icon: '🦆' },
         { name: 'GitHub Trending', url: 'https://github.com/trending', icon: '📈' },
         { name: 'Time', url: 'https://time.com', icon: '⏱️' },
         { name: 'Reddit', url: 'https://www.reddit.com', icon: '🔥' }

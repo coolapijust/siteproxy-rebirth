@@ -1,1 +1,1 @@
-This folder contains the built output assets for the worker "siteproxy-cf" generated at 2026-01-26T09:25:31.846Z.
+This folder contains the built output assets for the worker "siteproxy-cf" generated at 2026-01-29T06:24:13.971Z.
