@@ -51,15 +51,15 @@ SiteProxy rebirth是一个部署在 Cloudflare workers 上的轻量级网络访�
 3.  **配置密码**：
     在部署后的 Settings -> Variables 中添加 `ACCESS_PASSWORD`。
 
-### 方法二：手动构建上传
+### 方法二：手动构建上传 (Cloudflare Workers)
 
 如果您不使用 Git 集成，可以手动构建产物：
 
-11.  **安装依赖与构建**：
+1.  **安装依赖与构建**：
     ```bash
     npm install
-    npm run build:file # 生成 dist/worker.js
     ```
+    -   生成单文件代码：`npm run build:file` (输出为 `dist/worker.js`)
 2.  **复制上传**：
     将生成的 `dist/worker.js` 内容复制到 Cloudflare Worker 的代码编辑器中保存。
 
@@ -72,11 +72,20 @@ SiteProxy rebirth是一个部署在 Cloudflare workers 上的轻量级网络访�
         -   **Encrypt**: 点击右侧的 **Encrypt** 按钮（如果是敏感密码，务必加密）。
     -   点击 **Save and deploy** 重启 Worker 生效。
 
+### 方法三：Node.js 虚拟主机/私有服务器 (✨新内核)
+
+SiteProxy 现已深度支持 Node.js 环境，提供更强的性能和更灵活的资源处理：
+
+1.  **打包构建**：运行 `npm run build:node` 生成生产环境 bundle。
+2.  **部署**：将 `dist/` 文件夹上传至您的服务器。
+3.  **安装 & 运行**：详见 [Node.js 部署指南](./DEPLOYMENT.md)。
+
 ## ⚙️ 环境变量说明
 
-| 变量名 | 必填 | 说明 | 后台配置位置 |
-|--------|------|------|--------------|
-| `ACCESS_PASSWORD` | 否 | 访问验证密码。设置后，访问首页将要求输入密码。建议开启 Encrypt 加密存储。 | Settings -> Variables |
+| 变量名 | 必填 | 说明 |
+|--------|------|------|
+| `ACCESS_PASSWORD` | 否 | 访问验证密码。设置后，访问首页将要求输入密码。建议开启加密存储。 |
+| `PORT` | 否 | (仅 Node.js) 服务监听端口，默认 `2568`。 |
 
 ## 💻 开发者模式 (源码部署)
 如果您想自己修改源码：

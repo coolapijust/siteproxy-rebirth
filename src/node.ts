@@ -1,7 +1,18 @@
+// Node.js Entry Point
+// Uses the same logic as Worker but with htmlrewriter polyfill for Node.js
+
+import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { html } from 'hono/html'
 import { getCookie, setCookie } from 'hono/cookie'
+import { config } from 'dotenv'
+// Use the htmlrewriter package - a proper Cloudflare HTMLRewriter polyfill for Node.js
+import { HTMLRewriter } from 'htmlrewriter'
+
+// Load environment variables
+config()
+
 
 type Bindings = {
     ACCESS_PASSWORD: string
@@ -9,19 +20,26 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// 允许所有跨域请求
+// Inject process.env into c.env for compatibility with Hono's Worker-style API
+app.use('/*', async (c, next) => {
+    c.env = {
+        ACCESS_PASSWORD: process.env.ACCESS_PASSWORD || ''
+    } as Bindings
+    return next()
+})
+
+// Enable CORS
 app.use('/*', cors())
 
-// ============ 密码验证中间件 ============
+// Password authentication middleware
 app.use('/*', async (c, next) => {
     const password = c.env.ACCESS_PASSWORD
-    if (!password) return next() // 未配置密码则跳过验证
+    if (!password) return next()
 
     const authCookie = getCookie(c, '__sp_session')
     if (authCookie === password) return next()
 
-    // 检查是否是登录表单提交
-    if (c.req.method === 'POST') {
+    if (c.req.method === 'POST' && new URL(c.req.url).pathname === '/') {
         const formData = await c.req.parseBody()
         if (formData['password'] === password) {
             setCookie(c, '__sp_session', password, {
@@ -31,11 +49,10 @@ app.use('/*', async (c, next) => {
         }
     }
 
-    // 返回登录页面
     return c.html(renderLoginPage())
 })
 
-// ============ 主路由 ============
+// Main proxy route
 app.all('/*', async (c) => {
     const urlStr = c.req.url
     const urlObj = new URL(urlStr)
@@ -44,12 +61,12 @@ app.all('/*', async (c) => {
     const path = urlObj.pathname + urlObj.search
     let targetUrlStr = urlStr.replace(workerOrigin + '/', '')
 
-    // 1. 首页
+    // Homepage
     if (targetUrlStr === '' || targetUrlStr === '/') {
         return c.html(renderHomePage(workerOrigin))
     }
 
-    // 2. Referer / Cookie 回退
+    // Referer / Cookie fallback
     if (!targetUrlStr.startsWith('http')) {
         let fallbackOrigin = ''
         const referer = c.req.header('Referer')
@@ -81,31 +98,55 @@ app.all('/*', async (c) => {
         return c.text('无效的目标 URL', 400)
     }
 
-    // 3. 构建请求
-    const newReqHeaders = new Headers(c.req.header())
+    // Build request headers
+    const newReqHeaders = new Headers()
+    const originalHeaders = c.req.header()
+
+    // Copy allow-listed headers from original request
+    const preservedHeaders = ['user-agent', 'accept', 'accept-language', 'cookie', 'authorization', 'content-type']
+    preservedHeaders.forEach(h => {
+        const val = originalHeaders[h]
+        if (val) newReqHeaders.set(h, val)
+    })
+
     newReqHeaders.set('Host', targetUrl.host)
     newReqHeaders.set('Referer', targetUrl.origin)
     newReqHeaders.set('Origin', targetUrl.origin)
-    newReqHeaders.delete('cf-connecting-ip')
-    newReqHeaders.delete('cf-ipcountry')
-    newReqHeaders.delete('cf-ray')
-    newReqHeaders.delete('cf-visitor')
+    // !! CRITICAL: Force identity encoding for ALL requests to prevent compressed responses
+    newReqHeaders.set('Accept-Encoding', 'identity')
 
     try {
-        const res = await fetch(targetUrl.href, {
+        const fetchOptions: any = {
             method: c.req.method,
             headers: newReqHeaders,
-            body: c.req.raw.body,
-            redirect: 'manual'
-        })
+            redirect: 'manual',
+            duplex: 'half', // Required for streaming body in Node.js
+            signal: c.req.raw.signal // !! CRITICAL: Free resources immediately if client disconnects
+        }
+
+        // Body is only allowed for methods other than GET/HEAD
+        if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+            fetchOptions.body = c.req.raw.body
+        }
+
+        const res = await fetch(targetUrl.href, fetchOptions)
 
         const resHeaders = new Headers(res.headers)
         resHeaders.set('Access-Control-Allow-Origin', '*')
+        resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+        resHeaders.set('Access-Control-Allow-Headers', '*')
         resHeaders.delete('Content-Security-Policy')
+        resHeaders.delete('Content-Security-Policy-Report-Only')
         resHeaders.delete('X-Frame-Options')
         resHeaders.delete('Referrer-Policy')
+        resHeaders.delete('X-Content-Type-Options')
+        // !! CRITICAL: Remove encoding header from response as well to prevent browser from trying to decompress identity data
+        resHeaders.delete('Content-Encoding')
+        // Remove SRI related headers
+        resHeaders.delete('Source-Map')
+        resHeaders.delete('X-SourceMap')
 
-        // 4. 重定向处理
+        // Handle redirects
         if (resHeaders.has('Location')) {
             const loc = resHeaders.get('Location')
             if (loc) {
@@ -115,7 +156,7 @@ app.all('/*', async (c) => {
             }
         }
 
-        // 5. Cookie 域名重写
+        // Rewrite cookie domains
         const setCookies = res.headers.getSetCookie()
         if (setCookies.length > 0) {
             resHeaders.delete('Set-Cookie')
@@ -130,6 +171,10 @@ app.all('/*', async (c) => {
                 path: '/', secure: true, httpOnly: true, sameSite: 'None', maxAge: 864000
             })
 
+            // Clean up headers that might cause issues during/after transformation
+            resHeaders.delete('Content-Length')
+            resHeaders.delete('Content-Encoding')
+
             return new HTMLRewriter()
                 .on('meta[http-equiv="refresh"]', new MetaRefreshHandler(workerOrigin, targetUrl.origin))
                 .on('meta[name="referrer"]', { element(e: any) { e.remove() } })
@@ -137,65 +182,91 @@ app.all('/*', async (c) => {
                     element(e: any) {
                         e.append(`
                         <script>
-                            window.__SP_ORIGIN__ = "${targetUrl.origin}";
-                            window.__SP_WORKER__ = "${workerOrigin}";
-                            document.addEventListener('click', e => {
-                                const a = e.target.closest('a');
-                                if (a && a.href && !a.href.startsWith(window.__SP_WORKER__) && !a.href.startsWith('javascript:')) {
-                                    e.preventDefault();
-                                    window.location.href = window.__SP_WORKER__ + '/' + a.href;
+                            (function() {
+                                const worker = "${workerOrigin}";
+                                const target = "${targetUrl.origin}";
+                                function rewriteUrl(url) {
+                                    if (!url || typeof url !== 'string' || url.startsWith(worker) || url.startsWith('javascript:') || url.startsWith('data:')) return url;
+                                    if (url.startsWith('http')) return worker + '/' + url;
+                                    if (url.startsWith('//')) return worker + '/https:' + url;
+                                    if (url.startsWith('/')) return worker + '/' + target + url;
+                                    return url;
                                 }
-                            }, true);
-                            const originalOpen = window.open;
-                            window.open = function(url, ...args) {
-                                if (url && typeof url === 'string' && !url.startsWith(window.__SP_WORKER__)) {
-                                    url = window.__SP_WORKER__ + '/' + url;
+                                document.addEventListener('click', e => {
+                                    const a = e.target.closest('a');
+                                    if (a && a.href) {
+                                        const rewritten = rewriteUrl(a.getAttribute('href'));
+                                        if (rewritten !== a.getAttribute('href')) {
+                                            const absoluteHref = a.href;
+                                            if (absoluteHref.startsWith('http') && !absoluteHref.startsWith(worker)) {
+                                                e.preventDefault();
+                                                window.location.href = worker + '/' + absoluteHref;
+                                            }
+                                        }
+                                    }
+                                }, true);
+                                const originalOpen = window.open;
+                                window.open = function(url, ...args) { return originalOpen.call(window, rewriteUrl(url), ...args); };
+                                const originalFetch = window.fetch;
+                                window.fetch = function(input, init) {
+                                    if (typeof input === 'string') input = rewriteUrl(input);
+                                    else if (input instanceof Request) {
+                                        const newUrl = rewriteUrl(input.url);
+                                        if (newUrl !== input.url) input = new Request(newUrl, input);
+                                    }
+                                    return originalFetch(input, init);
+                                };
+                                const originalXhrOpen = XMLHttpRequest.prototype.open;
+                                XMLHttpRequest.prototype.open = function(method, url, ...args) {
+                                    return originalXhrOpen.call(this, method, rewriteUrl(url), ...args);
+                                };
+                                if (navigator.sendBeacon) {
+                                    const originalSendBeacon = navigator.sendBeacon;
+                                    navigator.sendBeacon = function(url, data) {
+                                        return originalSendBeacon.call(navigator, rewriteUrl(url), data);
+                                    };
                                 }
-                                return originalOpen.call(window, url, ...args);
-                            };
-
-                            // Fetch Interceptor
-                            const originalFetch = window.fetch;
-                            window.fetch = function(input, init) {
-                                if (typeof input === 'string' && input.startsWith('http') && !input.startsWith(window.__SP_WORKER__)) {
-                                    input = window.__SP_WORKER__ + '/' + input;
-                                } else if (input instanceof Request && input.url.startsWith('http') && !input.url.startsWith(window.__SP_WORKER__)) {
-                                    input = new Request(window.__SP_WORKER__ + '/' + input.url, input);
-                                }
-                                return originalFetch(input, init);
-                            };
-
-                            // XHR Interceptor
-                            const originalXhrOpen = XMLHttpRequest.prototype.open;
-                            XMLHttpRequest.prototype.open = function(method, url, ...args) {
-                                if (typeof url === 'string' && url.startsWith('http') && !url.startsWith(window.__SP_WORKER__)) {
-                                    url = window.__SP_WORKER__ + '/' + url;
-                                }
-                                return originalXhrOpen.call(this, method, url, ...args);
-                            };
+                            })();
                         </script>
                         `, { html: true })
                     }
                 })
                 .on('a', new ElementHandler('href', workerOrigin, targetUrl.origin))
                 .on('img', new ElementHandler('src', workerOrigin, targetUrl.origin))
+                .on('img', new ElementHandler('srcset', workerOrigin, targetUrl.origin))
                 .on('link', new ElementHandler('href', workerOrigin, targetUrl.origin))
                 .on('script', new ElementHandler('src', workerOrigin, targetUrl.origin))
                 .on('form', new ElementHandler('action', workerOrigin, targetUrl.origin))
                 .on('iframe', new ElementHandler('src', workerOrigin, targetUrl.origin))
+                .on('source', new ElementHandler('src', workerOrigin, targetUrl.origin))
+                .on('source', new ElementHandler('srcset', workerOrigin, targetUrl.origin))
+                .on('video', new ElementHandler('src', workerOrigin, targetUrl.origin))
+                .on('audio', new ElementHandler('src', workerOrigin, targetUrl.origin))
+                .on('track', new ElementHandler('src', workerOrigin, targetUrl.origin))
                 .on('[data-src]', new ElementHandler('data-src', workerOrigin, targetUrl.origin))
                 .on('[data-href]', new ElementHandler('data-href', workerOrigin, targetUrl.origin))
                 .on('[data-url]', new ElementHandler('data-url', workerOrigin, targetUrl.origin))
+                .on('script[integrity], link[integrity], img[integrity]', {
+                    element(e: any) {
+                        e.removeAttribute('integrity');
+                    }
+                })
+                .on('script[crossorigin], link[crossorigin], img[crossorigin]', {
+                    element(e: any) {
+                        e.removeAttribute('crossorigin');
+                    }
+                })
                 .transform(new Response(res.body, { status: res.status, headers: resHeaders }))
         }
 
         return new Response(res.body, { status: res.status, headers: resHeaders })
     } catch (e) {
+        console.error(`[Proxy Error] ${targetUrlStr}:`, e)
         return c.text(`代理错误: ${e}`, 500)
     }
 })
 
-// ============ 辅助类 ============
+// Helper Classes (copied from Worker version for direct compatibility)
 class ElementHandler {
     constructor(private attr: string, private workerOrigin: string, private targetOrigin: string) { }
     element(e: any) {
@@ -225,7 +296,7 @@ class MetaRefreshHandler {
     }
 }
 
-// ============ 页面渲染 ============
+// Page Renderers
 function renderLoginPage() {
     return html`
     <!DOCTYPE html>
@@ -246,7 +317,6 @@ function renderLoginPage() {
         <div class="box">
             <h1>🔒 访问验证</h1>
             <form method="POST">
-                <!-- 添加隐藏的用户名输入框以辅助密码管理器 -->
                 <input type="text" name="username" value="admin" style="display:none" autocomplete="username">
                 <input type="password" name="password" placeholder="请输入访问密码" required autofocus autocomplete="current-password">
                 <button type="submit">验证</button>
@@ -323,4 +393,18 @@ function renderHomePage(origin: string) {
     `
 }
 
-export default app
+// Start the server
+const port = parseInt(process.env.PORT || '2568', 10)
+
+console.log(`🚀 SiteProxy Node.js server starting on port ${port}...`)
+
+try {
+    serve({
+        fetch: app.fetch,
+        port
+    })
+    console.log(`✅ Server running at http://localhost:${port}`)
+} catch (err) {
+    console.error('❌ Failed to start server:', err)
+    process.exit(1)
+}

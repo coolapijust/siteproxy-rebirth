@@ -1,15 +1,30 @@
 {
     "name": "siteproxy-cf",
     "version": "1.0.0",
-    "main": "src/index.ts",
+    "main": "dist/server.js",
     "scripts": {
         "dev": "wrangler dev",
-        "deploy": "wrangler deploy"
+        "deploy": "wrangler deploy",
+        "dev:node": "npx tsx src/node.ts",
+        "build:node": "node build-node.js",
+        "start": "node dist/server.mjs"
     },
     "dependencies": {
-        "hono": "^4.0.0"
+        "@hono/node-server": "^1.19.9",
+        "@miniflare/html-rewriter": "^2.14.4",
+        "css-what": "^7.0.0",
+        "dom-serializer": "^2.0.0",
+        "domhandler": "^5.0.3",
+        "domutils": "^3.2.2",
+        "dotenv": "^17.2.3",
+        "hono": "^4.0.0",
+        "html-rewriter-wasm": "^0.4.1",
+        "htmlparser2": "^10.1.0",
+        "htmlrewriter": "^0.0.13"
     },
     "devDependencies": {
+        "@types/node": "^25.1.0",
+        "esbuild": "^0.27.2",
         "wrangler": "^3.0.0"
     }
 }
